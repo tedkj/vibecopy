@@ -1,0 +1,93 @@
+// What Rust hands the window. A job's state everywhere: 0 queued, 1 done, 2 running,
+// 3 needs a look (waiting for an answer, stopped), 4 failed files, 5 paused, 6 cancelled.
+
+export struct JobRow {
+    id: int,
+    // "12 files, 3 folders from D:\Photos"
+    title: string,
+    // The destination, whole (the card elides it in the middle).
+    dest: string,
+    // "Copy" or "Move".
+    mode: string,
+    state: int,
+    // "Copying", "Paused", "Done", "Done, 2 failed", "Queued (E:\ is busy)".
+    word: string,
+    // "1.2 GB of 4.0 GB · 120 of 400 files"
+    numbers: string,
+    // "84 MB/s · 2 min left"
+    speed: string,
+    // The running file, or why it stopped.
+    current: string,
+    // 0..1 while copying, -1 counting, below -1 none.
+    progress: float,
+    running: bool,
+    can-pause: bool,
+    can-resume: bool,
+    can-cancel: bool,
+    can-retry: bool,
+    finished: bool,
+}
+
+// One file in a job's list. state: 0 waiting, 1 done, 2 in progress, 3 skipped, 4 failed,
+// 5 waiting for an answer.
+export struct FileRow {
+    state: int,
+    word: string,
+    name: string,
+    size: string,
+    note: string,
+}
+
+export struct Tile {
+    caption: string,
+    value: string,
+    // Shown in the danger colour (failures).
+    alert: bool,
+}
+
+// Text helpers only Rust can do (the window cannot cut a string): paths elided in the middle.
+export global Fmt {
+    pure callback elide(string, int) -> string;
+    // Cascadia Mono's advance at 12 px: how many characters fit a width.
+    out property <length> mono-advance: 7.03px;
+}
+
+// The new job dialog. Rust fills it, hears every change, and checks the destination off the
+// UI thread.
+export global NewJob {
+    in property <string> sources-line;
+    in property <string> sources-sub;
+    in-out property <string> dest;
+    // 0 copy, 1 move.
+    in-out property <int> mode;
+    in-out property <bool> verify;
+    in-out property <int> policy;
+    in property <[string]> policies: ["Ask", "Skip", "Overwrite", "Overwrite if older", "Keep both"];
+    in property <[string]> recent;
+    in property <string> check;
+    // 0 neutral (checking), 1 ok, 3 warn, 4 error.
+    in property <int> check-kind;
+    in property <bool> can-start;
+    callback changed();
+    callback browse();
+    callback pick-recent(int);
+}
+
+// The conflict dialog: one file that is already there.
+export global Ask {
+    in property <string> name;
+    in property <string> folder;
+    in property <string> there-size;
+    in property <string> there-date;
+    in property <string> new-size;
+    in property <string> new-date;
+    // 0 the same age, 1 the one there is newer, 2 this one is newer.
+    in property <int> newer;
+    in-out property <bool> all;
+    // Other files of this job waiting for an answer.
+    in property <int> more;
+    in property <string> job;
+    // 0 skip, 1 keep both, 2 overwrite.
+    callback answer(int);
+    callback cancel-job();
+}

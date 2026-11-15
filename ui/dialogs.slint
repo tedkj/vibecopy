@@ -1,0 +1,240 @@
+// The app's dialogs: a new job (where the files go, how), a file that is already there, and a
+// plain confirm.
+
+import { Theme, Type, Icons, Icon, Button, ButtonKind, IconButton, CopyButton, Dialog, Checkbox, Segmented, Select, Chamfer, Field } from "@vibeware";
+import { NewJob, Ask, Fmt } from "types.slint";
+import { AppIcons } from "glyph.slint";
+
+component Recent inherits Rectangle {
+    in property <string> path;
+    in property <bool> inert;
+    callback picked();
+    height: 24px;
+    accessible-role: list-item;
+    accessible-label: root.path;
+    accessible-action-default => { root.picked(); }
+    background: ta.has-hover ? Theme.surface-3 : transparent;
+    ta := TouchArea { enabled: !root.inert; clicked => { root.picked(); } }
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 8px;
+        VerticalLayout {
+            alignment: center;
+            Icon { path: Icons.folder; tint: Theme.ink-3; }
+        }
+        Text {
+            text: Fmt.elide(root.path, Math.max(8, Math.floor((root.width - 40px) / Fmt.mono-advance)));
+            accessible-role: none;
+            font-family: Type.mono;
+            font-size: Type.small;
+            color: Theme.ink-2;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+    }
+}
+
+export component NewJobDialog {
+    in property <bool> top: true;
+    callback go();
+    callback cancelled();
+    callback opening();
+
+    Dialog {
+        width: root.width;
+        height: root.height;
+        title: "Where do they go?";
+        dialog-width: 600px;
+        top: root.top;
+        enter-accepts: NewJob.can-start;
+        opening => { root.opening(); }
+        cancelled => { root.cancelled(); }
+        accepted => { root.go(); }
+        VerticalLayout {
+            spacing: 2px;
+            Text { text: NewJob.sources-line; font-size: Type.small; font-weight: Type.strong; color: Theme.ink; overflow: elide; }
+            Text { text: NewJob.sources-sub; font-family: Type.mono; font-size: Type.small; color: Theme.ink-3; overflow: elide; }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            dest := Field {
+                inert: !root.top;
+                label: "TO";
+                mono: true;
+                a11y-name: "Destination folder";
+                placeholder: "E:\\Backup\\Photos";
+                text <=> NewJob.dest;
+                edited => { NewJob.changed(); }
+            }
+            Button { inert: !root.top; text: "Browse"; icon: Icons.folder; kind: ButtonKind.secondary; label: "Browse for the destination"; clicked => { NewJob.browse(); } }
+        }
+        if NewJob.recent.length > 0: VerticalLayout {
+            spacing: 0px;
+            Text { text: "Recent"; font-size: Type.small; color: Theme.ink-3; height: 20px; vertical-alignment: center; }
+            for r[i] in NewJob.recent: Recent {
+                path: r;
+                inert: !root.top;
+                picked => { NewJob.pick-recent(i); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 14px;
+            Segmented {
+                inert: !root.top;
+                label: "Copy or move";
+                options: ["Copy", "Move"];
+                selected <=> NewJob.mode;
+                changed(i) => { NewJob.changed(); }
+            }
+            VerticalLayout {
+                alignment: center;
+                Checkbox {
+                    inert: !root.top;
+                    text: "Verify (SHA-256 of both sides)";
+                    checked <=> NewJob.verify;
+                    toggled(v) => { NewJob.changed(); }
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            Text { text: "If a file is already there"; font-size: Type.small; color: Theme.ink-2; vertical-alignment: center; accessible-role: none; }
+            Select {
+                inert: !root.top;
+                label: "If a file is already there";
+                width: 200px;
+                options: NewJob.policies;
+                selected <=> NewJob.policy;
+                changed(i) => { NewJob.changed(); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            min-height: 20px;
+            accessible-role: text;
+            accessible-label: NewJob.check;
+            VerticalLayout {
+                alignment: start;
+                padding-top: 1px;
+                Icon {
+                    path: NewJob.check-kind == 1 ? Icons.check : NewJob.check-kind >= 3 ? Icons.alert : Icons.info;
+                    tint: NewJob.check-kind == 1 ? Theme.ok : NewJob.check-kind == 3 ? Theme.warn : NewJob.check-kind == 4 ? Theme.danger : Theme.ink-3;
+                }
+            }
+            Text {
+                text: NewJob.check;
+                accessible-role: none;
+                wrap: word-wrap;
+                font-size: Type.small;
+                color: NewJob.check-kind == 4 ? Theme.danger-text : NewJob.check-kind == 3 ? Theme.warn-text : Theme.ink-2;
+                horizontal-stretch: 1;
+            }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            Rectangle { horizontal-stretch: 1; }
+            Button { inert: !root.top; text: "Cancel"; kind: ButtonKind.ghost; clicked => { root.cancelled(); } }
+            Button {
+                inert: !root.top;
+                text: NewJob.mode == 1 ? "Move" : "Copy";
+                icon: NewJob.mode == 1 ? Icons.transfers : Icons.copy;
+                kind: ButtonKind.primary;
+                label: "Start";
+                enabled: NewJob.can-start;
+                clicked => { root.go(); }
+            }
+        }
+    }
+}
+
+component Side inherits HorizontalLayout {
+    in property <string> caption;
+    in property <string> size;
+    in property <string> date;
+    in property <bool> newer;
+    spacing: 10px;
+    height: 22px;
+    accessible-role: text;
+    accessible-label: root.caption;
+    accessible-description: root.size + ", " + root.date + (root.newer ? ", newer" : "");
+    Text { text: root.caption; accessible-role: none; width: 84px; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+    Text { text: root.size; accessible-role: none; width: 84px; font-family: Type.mono; font-size: Type.small; color: Theme.ink; vertical-alignment: center; horizontal-alignment: right; }
+    Text { text: root.date; accessible-role: none; font-family: Type.mono; font-size: Type.small; color: Theme.ink; vertical-alignment: center; }
+    Text { text: root.newer ? "newer" : ""; accessible-role: none; font-size: Type.small; font-weight: Type.strong; color: Theme.accent; vertical-alignment: center; horizontal-stretch: 1; }
+}
+
+// A file that is already there. Escape skips it (nothing is lost); Enter presses nothing.
+export component AskDialog {
+    in property <bool> top: true;
+    callback opening();
+
+    Dialog {
+        width: root.width;
+        height: root.height;
+        title: Ask.name + " is already there";
+        dialog-width: 500px;
+        top: root.top;
+        enter-accepts: false;
+        opening => { root.opening(); }
+        cancelled => { Ask.answer(0); }
+        VerticalLayout {
+            spacing: 2px;
+            Text { text: "In " + Ask.folder; font-family: Type.mono; font-size: Type.small; color: Theme.ink-2; overflow: elide; }
+            Text { text: Ask.job; font-size: Type.small; color: Theme.ink-3; overflow: elide; }
+        }
+        VerticalLayout {
+            spacing: 0px;
+            Side { caption: "There now"; size: Ask.there-size; date: Ask.there-date; newer: Ask.newer == 1; }
+            Side { caption: "Copying"; size: Ask.new-size; date: Ask.new-date; newer: Ask.newer == 2; }
+        }
+        Checkbox {
+            inert: !root.top;
+            text: Ask.more > 0 ? "Do the same for the rest of this job (" + Ask.more + " more waiting)" : "Do the same for the rest of this job";
+            checked <=> Ask.all;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            Button { inert: !root.top; text: "Cancel job"; kind: ButtonKind.ghost; tooltip: "Stop this job (what is copied stays)"; clicked => { Ask.cancel-job(); } }
+            Rectangle { horizontal-stretch: 1; }
+            Button { inert: !root.top; text: "Skip"; kind: ButtonKind.ghost; tooltip: "Leave the one there (Esc)"; clicked => { Ask.answer(0); } }
+            Button { inert: !root.top; text: "Overwrite"; kind: ButtonKind.secondary; tooltip: "Replace the one there"; clicked => { Ask.answer(2); } }
+            Button { inert: !root.top; text: "Keep both"; kind: ButtonKind.primary; tooltip: "Copy it as a (2) beside it"; clicked => { Ask.answer(1); } }
+        }
+    }
+}
+
+// A question with one way forward and one back. Enter only presses the focused button.
+export component ConfirmDialog {
+    in property <string> title;
+    in property <string> body;
+    in property <string> ok-text: "OK";
+    in property <string> no-text: "Cancel";
+    in property <bool> danger;
+    in property <bool> top: true;
+    callback accepted();
+    callback cancelled();
+    callback opening();
+    callback copy(string) -> bool;
+
+    Dialog {
+        width: root.width;
+        height: root.height;
+        title: root.title;
+        dialog-width: 440px;
+        top: root.top;
+        enter-accepts: false;
+        opening => { root.opening(); }
+        cancelled => { root.cancelled(); }
+        Text { text: root.body; wrap: word-wrap; font-size: Type.body; color: Theme.ink-2; }
+        HorizontalLayout {
+            spacing: 8px;
+            CopyButton { inert: !root.top; caption: "Copy"; copy => { root.copy(root.title + "\n\n" + root.body) } }
+            Rectangle { horizontal-stretch: 1; }
+            Button { inert: !root.top; text: root.no-text; kind: ButtonKind.ghost; clicked => { root.cancelled(); } }
+            Button { inert: !root.top; text: root.ok-text; kind: root.danger ? ButtonKind.danger : ButtonKind.primary; clicked => { root.accepted(); } }
+        }
+    }
+}

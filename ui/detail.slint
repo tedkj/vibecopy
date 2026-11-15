@@ -1,0 +1,196 @@
+// One job, close up: its files with their state, failures first, and Retry.
+
+import { ListView } from "std-widgets.slint";
+import { Theme, Type, Icons, Icon, Button, ButtonKind, IconButton } from "@vibeware";
+import { JobRow, FileRow, Fmt } from "types.slint";
+import { AppIcons, States } from "glyph.slint";
+import { Route } from "queue.slint";
+
+// The note column's width: two fifths of what the fixed columns leave, at most 320 px.
+global Cols {
+    public pure function note(w: length) -> length {
+        Math.min(320px, Math.max(60px, (w - 28px - 96px - 72px - 30px) * 0.4))
+    }
+}
+
+component FileLine inherits Rectangle {
+    in property <FileRow> line;
+    height: Theme.row-h;
+    // One accessibility node per row (a scroll rebuilds every visible row's nodes).
+    accessible-role: list-item;
+    accessible-label: root.line.name;
+    accessible-description: root.line.word + (root.line.note != "" ? ": " + root.line.note : "");
+    background: ta.has-hover ? Theme.surface-2 : transparent;
+    ta := TouchArea {}
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 10px;
+        HorizontalLayout {
+            width: 96px;
+            spacing: 6px;
+            VerticalLayout {
+                alignment: center;
+                Icon { path: States.file-icon(root.line.state); tint: States.file-colour(root.line.state); }
+            }
+            Text {
+                text: root.line.word;
+                accessible-role: none;
+                font-size: Type.small;
+                color: root.line.state == 4 ? Theme.danger-text : root.line.state == 5 ? Theme.warn-text : Theme.ink-2;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+        }
+        Text {
+            text: root.line.name;
+            accessible-role: none;
+            font-family: Type.mono;
+            font-size: Type.small;
+            color: Theme.ink;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+            min-width: 0px;
+        }
+        Text {
+            text: root.line.size;
+            accessible-role: none;
+            width: 72px;
+            horizontal-alignment: right;
+            font-family: Type.mono;
+            font-size: Type.small;
+            color: Theme.ink-2;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.line.note;
+            accessible-role: none;
+            font-size: Type.small;
+            color: root.line.state == 4 ? Theme.danger-text : Theme.ink-3;
+            vertical-alignment: center;
+            overflow: elide;
+            width: Cols.note(root.width);
+        }
+    }
+}
+
+component Head inherits Text {
+    accessible-role: none;
+    font-family: Type.mono;
+    font-size: Type.small;
+    color: Theme.ink-3;
+    vertical-alignment: center;
+}
+
+export component DetailPage inherits Rectangle {
+    in property <JobRow> job;
+    in property <[FileRow]> files;
+    in property <string> summary;
+    in property <int> failed;
+    in property <bool> can-retry;
+    in property <bool> inert;
+    callback back();
+    callback retry();
+    callback reveal();
+    callback pause();
+    callback resume();
+    callback cancel();
+
+    accessible-role: groupbox;
+    accessible-label: root.job.title;
+
+    VerticalLayout {
+        // ---- header ----
+        Rectangle {
+            height: 68px;
+            background: Theme.bg;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 14px;
+                spacing: 10px;
+                VerticalLayout {
+                    alignment: center;
+                    IconButton { inert: root.inert; icon: AppIcons.back; label: "Back"; tooltip: "Back to the queue (Esc)"; clicked => { root.back(); } }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Icon { path: States.icon(root.job.state); tint: States.colour(root.job.state); }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 3px;
+                    horizontal-stretch: 1;
+                    min-width: 120px;
+                    Text { text: root.job.title; font-size: Type.body; font-weight: Type.strong; color: Theme.ink; overflow: elide; }
+                    Route { dest: root.job.dest; mode: root.job.mode; }
+                }
+                if root.job.can-pause: VerticalLayout {
+                    alignment: center;
+                    Button { inert: root.inert; text: "Pause"; icon: Icons.pause; kind: ButtonKind.ghost; label: "Pause this job"; clicked => { root.pause(); } }
+                }
+                if root.job.can-resume: VerticalLayout {
+                    alignment: center;
+                    Button { inert: root.inert; text: "Resume"; icon: AppIcons.play; kind: ButtonKind.ghost; label: "Resume this job"; clicked => { root.resume(); } }
+                }
+                if root.job.can-cancel: VerticalLayout {
+                    alignment: center;
+                    Button { inert: root.inert; text: "Cancel"; icon: Icons.stop; kind: ButtonKind.ghost; label: "Cancel this job"; clicked => { root.cancel(); } }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Button { inert: root.inert; text: "Open destination"; icon: Icons.folder-open; kind: ButtonKind.ghost; clicked => { root.reveal(); } }
+                }
+                if root.can-retry: VerticalLayout {
+                    alignment: center;
+                    Button {
+                        inert: root.inert;
+                        text: "Retry failed";
+                        icon: AppIcons.retry;
+                        kind: ButtonKind.primary;
+                        tooltip: "Copy the failed files again";
+                        clicked => { root.retry(); }
+                    }
+                }
+            }
+            Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+        }
+        // ---- what happened, in one line ----
+        // (The window's own surface shows through: no second fill of it.)
+        Rectangle {
+            height: 36px;
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                spacing: 12px;
+                Text {
+                    text: root.summary;
+                    font-size: Type.small;
+                    color: root.failed > 0 ? Theme.danger-text : Theme.ink-2;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                Text { text: root.job.numbers; font-family: Type.mono; font-size: Type.small; color: Theme.ink-3; vertical-alignment: center; }
+            }
+        }
+        // ---- the files ----
+        // The head is placed by hand at the rows' columns (a layout here would make its width
+        // depend on itself).
+        Rectangle {
+            height: Theme.row-h;
+            background: Theme.surface-2;
+            property <length> note-w: Cols.note(self.width);
+            Head { x: 14px; height: parent.height; text: "STATE"; }
+            Head { x: 14px + 96px + 10px; height: parent.height; text: "NAME"; }
+            Head { x: parent.width - 14px - parent.note-w - 10px - 72px; width: 72px; height: parent.height; text: "SIZE"; horizontal-alignment: right; }
+            Head { x: parent.width - 14px - parent.note-w; height: parent.height; text: "NOTE"; }
+            Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+        }
+        ListView {
+            vertical-stretch: 1;
+            for f in root.files: FileLine { line: f; }
+        }
+    }
+}

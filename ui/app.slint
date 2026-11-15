@@ -1,0 +1,399 @@
+// VibeCopy's main window. Layout and drawing only; every decision is made in Rust.
+
+import { Theme, Type, Icons, Icon, Chamfer, IconButton, Button, ButtonKind, TipLayer, Toast, ToastKind, Menu, MenuEntry } from "@vibeware";
+import { Brand, AboutDialog, CheckRow } from "brand.slint";
+import { JobRow, FileRow, Tile, Fmt, NewJob, Ask } from "types.slint";
+import { Summary, JobList, DropZone } from "queue.slint";
+import { DetailPage } from "detail.slint";
+import { AppIcons } from "glyph.slint";
+import { NewJobDialog, AskDialog, ConfirmDialog } from "dialogs.slint";
+
+export { JobRow, FileRow, Tile, Fmt, NewJob, Ask }
+
+export struct ToastItem {
+    id: int,
+    text: string,
+    kind: ToastKind,
+    action: string,
+}
+
+export component AppWindow inherits Window {
+    title: "VibeCopy";
+    icon: @image-url("../assets/app-128.png");
+    preferred-width: 1000px;
+    preferred-height: 640px;
+    min-width: 720px;
+    min-height: 480px;
+    background: Theme.surface;
+    default-font-family: Type.ui;
+    default-font-size: Type.small;
+    default-font-weight: Type.regular;
+
+    in property <string> version;
+    in property <string> status-left;
+    in property <string> status-right;
+    in property <[ToastItem]> toasts;
+    in-out property <bool> about-open;
+    // About's version line and its install check (the controller's words and states).
+    in property <string> about-line;
+    in property <[CheckRow]> check-rows;
+    in property <bool> checking;
+    in property <bool> checked;
+
+    // ---- the queue ----
+    in property <int> page;              // 0 the queue, 1 one job
+    in property <[Tile]> tiles;
+    in property <[JobRow]> jobs;
+    in property <bool> can-clear;
+    in property <bool> any-running;
+    in property <bool> all-paused;
+    in property <bool> can-pause-all;
+    in property <string> restored;
+    in property <bool> drop-hover;
+
+    // ---- one job ----
+    in property <JobRow> detail;
+    in property <[FileRow]> files;
+    in property <string> detail-summary;
+    in property <int> detail-failed;
+    in property <bool> detail-can-retry;
+
+    // ---- dialogs ----
+    in property <bool> new-open;
+    in property <bool> ask-open;
+    in property <bool> confirm-open;
+    in property <string> confirm-title;
+    in property <string> confirm-body;
+    in property <string> confirm-ok: "OK";
+    in property <string> confirm-no: "Cancel";
+    in property <bool> confirm-danger;
+
+    out property <bool> dialog-open: root.new-open || root.ask-open || root.confirm-open || root.about-open;
+    // Drawn bottom to top: new job, ask, about, confirm. Only the top one takes keys.
+    property <bool> new-top: !root.ask-open && !root.about-open && !root.confirm-open;
+    property <bool> ask-top: !root.about-open && !root.confirm-open;
+    property <bool> about-top: !root.confirm-open;
+
+    callback toggle-theme();
+    // About: "Check this install" pressed (the controller runs it on a worker, once at a time),
+    // and the website link.
+    callback check-install();
+    callback open-site();
+    callback toast-action(int);
+    callback toast-dismissed(int);
+    callback copy-text(string) -> bool;
+    callback paste();
+    callback pause-all();
+    callback resume-all();
+    callback clear-finished();
+    callback open-job(int);
+    callback pause-job(int);
+    callback resume-job(int);
+    callback cancel-job(int);
+    callback remove-job(int);
+    callback reveal-job(int);
+    callback job-menu(int, int);
+    callback resume-restored();
+    callback discard-restored();
+    callback back();
+    callback detail-retry();
+    callback detail-reveal();
+    callback detail-pause();
+    callback detail-resume();
+    callback detail-cancel();
+    callback new-start();
+    callback new-cancel();
+    callback confirm-accepted();
+    callback confirm-cancelled();
+    // Every dialog is gone (one closed by the window itself, About, included).
+    callback dialogs-closed();
+
+    property <int> menu-job: -1;
+    property <length> menu-x;
+    property <length> menu-y;
+
+    // Every popup, before a dialog takes the keyboard (closing one later would hand the focus
+    // back to whatever had it before the popup).
+    function close-popups() {
+        job-menu.close();
+    }
+
+    // The window's own keys: Ctrl+V pastes, Escape goes back. It has the keyboard whenever
+    // nothing inside wants it.
+    init => { keys.focus(); }
+    changed page => { keys.focus(); }
+    changed dialog-open => {
+        if (!root.dialog-open) {
+            keys.focus();
+            root.dialogs-closed();
+        }
+    }
+
+    keys := FocusScope {
+        focus-on-click: false;
+        // The window's key catcher is no Tab stop: a Tab past a dialog's last button must not land
+        // here, where Escape would not reach the dialog (About v2 has three stops; 2026-11-04).
+        focus-on-tab-navigation: false;
+        key-pressed(e) => {
+            if (root.dialog-open) {
+                return reject;
+            }
+            if (e.modifiers.control && (e.text == "v" || e.text == "V")) {
+                root.paste();
+                return accept;
+            }
+            if (e.text == Key.Escape && root.page == 1) {
+                root.back();
+                return accept;
+            }
+            reject
+        }
+
+        VerticalLayout {
+            // ---- the bar ----
+            Rectangle {
+                height: 48px;
+                background: Theme.bg;
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 10px;
+                    spacing: 8px;
+                    Brand {}
+                    Rectangle { horizontal-stretch: 1; }
+                    VerticalLayout {
+                        alignment: center;
+                        Button {
+                            text: "Paste";
+                            icon: AppIcons.paste;
+                            kind: ButtonKind.ghost;
+                            label: "Paste files";
+                            tooltip: "Paste files copied or cut in Explorer (Ctrl+V)";
+                            inert: root.dialog-open;
+                            clicked => { root.paste(); }
+                        }
+                    }
+                    if root.can-pause-all: VerticalLayout {
+                        alignment: center;
+                        Button {
+                            text: "Pause all";
+                            icon: Icons.pause;
+                            kind: ButtonKind.ghost;
+                            tooltip: "Pause every job";
+                            inert: root.dialog-open;
+                            clicked => { root.pause-all(); }
+                        }
+                    }
+                    if root.all-paused: VerticalLayout {
+                        alignment: center;
+                        Button {
+                            text: "Resume all";
+                            icon: AppIcons.play;
+                            kind: ButtonKind.ghost;
+                            tooltip: "Resume every paused job";
+                            inert: root.dialog-open;
+                            clicked => { root.resume-all(); }
+                        }
+                    }
+                    Rectangle { width: 4px; }
+                    VerticalLayout {
+                        alignment: center;
+                        IconButton {
+                            icon: Icons.theme;
+                            label: "Theme";
+                            tooltip: Theme.dark ? "Light theme" : "Dark theme";
+                            inert: root.dialog-open;
+                            clicked => { root.toggle-theme(); }
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        IconButton {
+                            icon: Icons.info;
+                            label: "About";
+                            tooltip: "About VibeCopy";
+                            inert: root.dialog-open;
+                            clicked => { root.about-open = true; }
+                        }
+                    }
+                }
+                Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+            }
+
+            // ---- the work area ----
+            if root.page == 0: Summary {
+                tiles: root.tiles;
+                can-clear: root.can-clear;
+                inert: root.dialog-open;
+                clear-finished => { root.clear-finished(); }
+            }
+            if root.page == 0 && root.jobs.length > 0: JobList {
+                vertical-stretch: 1;
+                jobs: root.jobs;
+                inert: root.dialog-open;
+                restored: root.restored;
+                open(i) => { root.open-job(i); }
+                pause(i) => { root.pause-job(i); }
+                resume(i) => { root.resume-job(i); }
+                cancel(i) => { root.cancel-job(i); }
+                remove(i) => { root.remove-job(i); }
+                reveal(i) => { root.reveal-job(i); }
+                menu(i, x, y) => {
+                    root.menu-job = i;
+                    root.menu-x = x - 220px;
+                    root.menu-y = y + 2px;
+                    job-menu.show();
+                }
+                resume-restored => { root.resume-restored(); }
+                discard-restored => { root.discard-restored(); }
+            }
+            if root.page == 0 && root.jobs.length == 0: DropZone {
+                vertical-stretch: 1;
+                inert: root.dialog-open;
+                hover: root.drop-hover;
+                paste => { root.paste(); }
+            }
+            if root.page == 1: DetailPage {
+                vertical-stretch: 1;
+                job: root.detail;
+                files: root.files;
+                summary: root.detail-summary;
+                failed: root.detail-failed;
+                can-retry: root.detail-can-retry;
+                inert: root.dialog-open;
+                back => { root.back(); }
+                retry => { root.detail-retry(); }
+                reveal => { root.detail-reveal(); }
+                pause => { root.detail-pause(); }
+                resume => { root.detail-resume(); }
+                cancel => { root.detail-cancel(); }
+            }
+
+            // ---- the status line ----
+            Rectangle {
+                height: 26px;
+                background: Theme.bg;
+                Rectangle { y: 0; height: 1px; background: Theme.line; }
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    spacing: 12px;
+                    Text { text: root.status-left; color: Theme.ink-2; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                    Text { text: root.status-right; font-family: Type.mono; color: Theme.ink-3; vertical-alignment: center; }
+                }
+            }
+        }
+    }
+
+    // Files dragged over a full queue: the whole work area says it takes them.
+    if root.drop-hover && root.jobs.length > 0 && !root.dialog-open: Rectangle {
+        x: 0;
+        y: 48px;
+        width: root.width;
+        height: root.height - 48px - 26px;
+        background: Theme.accent-soft;
+        border-width: 1px;
+        border-color: Theme.accent;
+        Text {
+            text: "Drop to copy or move them";
+            font-size: Type.body;
+            font-weight: Type.strong;
+            color: Theme.accent;
+        }
+    }
+
+    job-menu := Menu {
+        x: root.menu-x;
+        y: root.menu-y;
+        menu-width: 220px;
+        entries: [
+            { label: "Details", icon: Icons.file },
+            { label: "Move up", icon: Icons.chevron-up, disabled: root.menu-job <= 0 },
+            { label: "Move down", icon: Icons.chevron-down, disabled: root.menu-job >= root.jobs.length - 1 },
+            { label: "Retry failed", icon: AppIcons.retry, disabled: !root.jobs[root.menu-job].can-retry },
+            { separator: true },
+            { label: "Remove from the list", icon: Icons.x, disabled: !root.jobs[root.menu-job].finished },
+        ];
+        activated(i) => { root.job-menu(root.menu-job, i); }
+    }
+
+    // Toasts, newest at the bottom, above the status line. Behind a dialog they stay on screen
+    // under the scrim, inert: Tab cannot reach their buttons. The controller shows at most 3,
+    // and each is at most a third of the room above the status line, so the column always fits
+    // with every Dismiss button (at a toast's top) inside the window, whatever the text: a
+    // longer one is cut at the bottom, and its Copy still gives all of it (RRF6-1).
+    VerticalLayout {
+        x: root.width - self.width - 14px;
+        y: root.height - self.height - 40px;
+        width: 380px;
+        height: self.preferred-height;
+        spacing: 8px;
+        for t in root.toasts: Rectangle {
+            width: 380px;
+            height: min(toast.height, (root.height - 40px - 2 * 8px) / 3);
+            clip: true;
+            toast := Toast {
+                x: 0;
+                y: 0;
+                text: t.text;
+                kind: t.kind;
+                action: t.action;
+                inert: root.dialog-open;
+                action-clicked => { root.toast-action(t.id); }
+                dismissed => { root.toast-dismissed(t.id); }
+                copy => { root.copy-text(t.text) }
+            }
+            // A cut toast keeps its bottom edge.
+            if toast.height > parent.height: Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: t.kind == ToastKind.error ? Theme.danger.with-alpha(0.55) : Theme.line-strong;
+            }
+        }
+    }
+
+    if root.new-open: NewJobDialog {
+        width: root.width;
+        height: root.height;
+        top: root.new-top;
+        opening => { root.close-popups(); }
+        go => { root.new-start(); }
+        cancelled => { root.new-cancel(); }
+    }
+
+    if root.ask-open: AskDialog {
+        width: root.width;
+        height: root.height;
+        top: root.ask-top;
+        opening => { root.close-popups(); }
+    }
+
+    if root.about-open: AboutDialog {
+        width: root.width;
+        height: root.height;
+        top: root.about-top;
+        line: root.about-line;
+        rows: root.check-rows;
+        checking: root.checking;
+        checked: root.checked;
+        check => { root.check-install(); }
+        open-site => { root.open-site(); }
+        opening => { root.close-popups(); }
+        closed => { root.about-open = false; }
+    }
+
+    if root.confirm-open: ConfirmDialog {
+        width: root.width;
+        height: root.height;
+        title: root.confirm-title;
+        body: root.confirm-body;
+        ok-text: root.confirm-ok;
+        no-text: root.confirm-no;
+        danger: root.confirm-danger;
+        opening => { root.close-popups(); }
+        accepted => { root.confirm-accepted(); }
+        cancelled => { root.confirm-cancelled(); }
+        copy(t) => { root.copy-text(t) }
+    }
+
+    TipLayer {}
+}
